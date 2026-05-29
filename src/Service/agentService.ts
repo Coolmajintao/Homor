@@ -1,15 +1,18 @@
 import { ToolRegistry } from "../tools/mainTools";
 import { client } from "../client";
 import { ToolHook } from "../agent/hooks";
+import { createLogger, Logger } from "../log";
 import "dotenv/config";
 
 export class AgentService {
   private toolRegistry: ToolRegistry;
   private messages: Array<{ role: string; content: string }> = [];
   private hooks: ToolHook[] = [];
+  private logger: Logger;
 
   constructor() {
     this.toolRegistry = new ToolRegistry();
+    this.logger = createLogger("AGENT");
   }
 
   registerHook(hook: ToolHook): void {
@@ -35,14 +38,21 @@ ${toolDescription}
       { role: "user", content: userTask },
     ];
 
+    this.logger.info("任务开始: " + userTask);
+
     let maxLoops = 10;
     let consecutiveRetries = 0;
     while (maxLoops-- > 0) {
       const response = await this.callModelStream();
-      if (!response) continue;
+      if (!response) {
+        this.logger.warn("模型返回空响应");
+        continue;
+      }
+      this.logger.debug("模型响应", { responseLength: response.length });
 
       const parsed = this.parseToolCall(response);
       if (parsed) {
+        this.logger.debug("解析工具调用", { tool: parsed.tool, args: parsed.args });
         // 记录 AI 的工具调用
         this.messages.push({ role: "assistant", content: response });
 
@@ -62,6 +72,22 @@ ${toolDescription}
           result,
         );
 
+        // 工具执行日志
+        if (result.success) {
+          this.logger.info("工具执行成功", {
+            tool: parsed.tool,
+            result:
+              typeof result.data === "string"
+                ? result.data.slice(0, 100)
+                : result.data,
+          });
+        } else {
+          this.logger.warn("工具执行失败", {
+            tool: parsed.tool,
+            error: result.error,
+          });
+        }
+
         // 组装返回给 AI 的消息
         let userMessage = "";
         if (beforeText) userMessage += `【提示】${beforeText}\n`;
@@ -74,6 +100,7 @@ ${toolDescription}
       }
 
       // 不是工具调用 → 判断是格式错误还是最终回答
+      this.logger.debug("非工具调用，判断为格式错误或最终答案");
       if (this.looksLikeFailedToolCall(response)) {
         consecutiveRetries++;
         if (consecutiveRetries >= 3) {
@@ -91,9 +118,11 @@ ${toolDescription}
       consecutiveRetries = 0;
 
       // 不是工具调用也不是格式错误 → 最终回答
+      this.logger.info("任务完成");
       return response;
     }
 
+    this.logger.warn("循环次数耗尽，强制退出", { maxLoops: 10 });
     return "任务未完成，循环次数已用完。";
   }
 
@@ -161,7 +190,8 @@ ${toolDescription}
       }
       process.stdout.write("\n");
       return fullContent;
-    } catch (error) {
+    } catch (error: any) {
+      this.logger.error("流式调用失败", { error: error?.message || String(error) });
       console.error("调用 AI 出错：", error);
       return "";
     }

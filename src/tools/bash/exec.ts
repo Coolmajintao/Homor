@@ -5,6 +5,7 @@ import {
   PermissionManager,
   RiskLevel,
 } from "./permissionManager";
+import { createLogger, Logger } from "../../log";
 
 const execAsync = promisify(exec);
 
@@ -42,6 +43,8 @@ export class ExecTool implements ITool {
     },
   ];
 
+  private logger: Logger = createLogger("EXEC");
+
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     const command = args.command as string;
     if (!command) {
@@ -59,6 +62,10 @@ export class ExecTool implements ITool {
     if (assessment.needsApproval) {
       // 高危命令直接拒绝（除非在永久白名单中）
       if (assessment.risk === RiskLevel.BLOCKED) {
+        this.logger.warn("安全拦截：高危命令", {
+          command,
+          reason: "BLOCKED",
+        });
         return {
           success: false,
           data: "",
@@ -68,8 +75,16 @@ export class ExecTool implements ITool {
       }
 
       // MODIFY / DESTRUCTIVE：需要用户确认
+      this.logger.info("等待用户确认", {
+        command,
+        riskLevel: assessment.risk,
+      });
       const result = await pm.confirmCommand(command, assessment.risk);
 
+      this.logger.info("用户确认结果", {
+        command,
+        confirmed: result.allowed,
+      });
       if (!result.allowed) {
         return { success: false, data: "", error: "用户取消了操作。" };
       }
@@ -87,6 +102,10 @@ export class ExecTool implements ITool {
       });
 
       const output = [stdout, stderr].filter(Boolean).join("\n");
+      this.logger.debug("命令执行成功", {
+        command,
+        outputLength: output.length,
+      });
       return {
         success: true,
         data: output || "命令执行成功（无输出）",
@@ -95,6 +114,11 @@ export class ExecTool implements ITool {
       const stdout = error.stdout || "";
       const stderr = error.stderr || "";
       const message = error.message || "";
+      this.logger.error("命令执行失败", {
+        command,
+        exitCode: error.code || "未知",
+        stderr: stderr.slice(0, 200),
+      });
       return {
         success: false,
         data: [stdout, stderr, message].filter(Boolean).join("\n"),
