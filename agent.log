@@ -10,3 +10,16 @@
 [2026-05-29 12:28:09] [DEBUG] [AGENT] 模型响应 | {"responseLength":95}
 [2026-05-29 12:28:09] [DEBUG] [AGENT] 非工具调用，判断为格式错误或最终答案
 [2026-05-29 12:28:09] [INFO] [AGENT] 任务完成
+[2026-05-29 12:52:55] [INFO] [AGENT] 会话初始化
+[2026-05-29 12:53:06] [INFO] [AGENT] 用户消息: 你是谁
+[2026-05-29 12:53:07] [DEBUG] [AGENT] 模型响应 | {"responseLength":42}
+[2026-05-29 12:53:07] [DEBUG] [AGENT] 非工具调用，判断为格式错误或最终答案
+[2026-05-29 12:53:07] [INFO] [AGENT] 任务完成
+[2026-05-29 12:53:24] [INFO] [AGENT] 用户消息: 帮我读取 test.txt 的内容
+[2026-05-29 12:53:26] [DEBUG] [AGENT] 模型响应 | {"responseLength":55}
+[2026-05-29 12:53:26] [DEBUG] [AGENT] 解析工具调用 | {"tool":"read_file","args":{"filePath":"test.txt"}}
+[2026-05-29 12:53:26] [DEBUG] [HOOK:ANTI-REPEAT] 防重复Hook触发
+[2026-05-29 12:53:26] [INFO] [AGENT] 工具执行成功 | {"tool":"read_file","result":"恭喜你读到了这个文件，你通过了测试哈哈哈"}
+[2026-05-29 12:53:28] [DEBUG] [AGENT] 模型响应 | {"responseLength":43}
+[2026-05-29 12:53:28] [DEBUG] [AGENT] 非工具调用，判断为格式错误或最终答案
+[2026-05-29 12:53:28] [INFO] [AGENT] 任务完成

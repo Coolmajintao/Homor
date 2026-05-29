@@ -1,24 +1,33 @@
 {
-  "name": "your-project-name",
+  "name": "homor",
   "version": "1.0.0",
+  "description": "Homor — 智能命令行编程助手，基于 LLM 的交互式 Agent",
   "main": "dist/index.js",
+  "bin": {
+    "homor": "bin/homor.js"
+  },
   "type": "commonjs",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --define:__DEV__=false",
+    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --define:__DEV__=false && esbuild src/homor-entry.mts --bundle --platform=node --format=esm --outfile=dist/homor.mjs --define:__DEV__=false --external:ink --external:react --external:dotenv --external:openai --external:commander",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "watch": "tsc --watch"
   },
   "dependencies": {
     "commander": "^14.0.3",
     "dotenv": "^17.4.2",
-    "openai": "^6.39.0"
+    "ink": "^4.4.1",
+    "ink-text-input": "^5.0.1",
+    "openai": "^6.39.0",
+    "react": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@types/react": "^18.3.29",
     "esbuild": "^0.28.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.22.3",
     "typescript": "^5.7.3"
   }
 }

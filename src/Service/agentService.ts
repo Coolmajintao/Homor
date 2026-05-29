@@ -4,6 +4,12 @@ import { ToolHook } from "../agent/hooks";
 import { createLogger, Logger } from "../log";
 import "dotenv/config";
 
+export interface AgentCallbacks {
+  onToken?: (token: string) => void;
+  onToolStart?: (tool: string, args: Record<string, unknown>) => void;
+  onToolEnd?: (tool: string, success: boolean, summary: string) => void;
+}
+
 export class AgentService {
   private toolRegistry: ToolRegistry;
   private messages: Array<{ role: string; content: string }> = [];
@@ -19,10 +25,11 @@ export class AgentService {
     this.hooks.push(hook);
   }
 
-  async execute(userTask: string): Promise<string> {
+  // ---- 初始化会话（仅设置系统提示，不发送用户消息） ----
+  init(): void {
     const toolDescription = this.toolRegistry.generateToolDescription();
-    const projectRoot = process.cwd();
     const systemPrompt = `你是编程助手。你可以使用以下工具完成任务。
+
 ${toolDescription}
 
 ## 工具调用规则
@@ -33,17 +40,34 @@ ${toolDescription}
 当任务完成时，直接回复最终结果，不需要使用工具。
 如果不需要使用工具就能回答问题，直接回复答案。`;
 
-    this.messages = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userTask },
-    ];
+    this.messages = [{ role: "system", content: systemPrompt }];
+    this.logger.info("会话初始化");
+  }
 
+  // ---- 一次性执行（向后兼容） ----
+  async execute(userTask: string): Promise<string> {
+    this.init();
+    this.messages.push({ role: "user", content: userTask });
     this.logger.info("任务开始: " + userTask);
+    return this.runAgentLoop();
+  }
 
+  // ---- 交互式对话（不重置消息历史） ----
+  async chat(
+    userMessage: string,
+    callbacks?: AgentCallbacks,
+  ): Promise<string> {
+    this.messages.push({ role: "user", content: userMessage });
+    this.logger.info("用户消息: " + userMessage);
+    return this.runAgentLoop(callbacks);
+  }
+
+  // ---- 共享 Agent 循环 ----
+  private async runAgentLoop(callbacks?: AgentCallbacks): Promise<string> {
     let maxLoops = 10;
     let consecutiveRetries = 0;
     while (maxLoops-- > 0) {
-      const response = await this.callModelStream();
+      const response = await this.callModelStream(callbacks?.onToken);
       if (!response) {
         this.logger.warn("模型返回空响应");
         continue;
@@ -52,34 +76,36 @@ ${toolDescription}
 
       const parsed = this.parseToolCall(response);
       if (parsed) {
-        this.logger.debug("解析工具调用", { tool: parsed.tool, args: parsed.args });
-        // 记录 AI 的工具调用
+        this.logger.debug("解析工具调用", {
+          tool: parsed.tool,
+          args: parsed.args,
+        });
         this.messages.push({ role: "assistant", content: response });
 
-        // 执行前 Hook
+        callbacks?.onToolStart?.(parsed.tool, parsed.args);
+
         const beforeText = this.applyBeforeHooksText(parsed.tool, parsed.args);
 
-        // 执行工具
         const result = await this.toolRegistry.execute(
           parsed.tool,
           parsed.args,
         );
 
-        // 执行后 Hook
+        const toolSummary = result.success
+          ? String(result.data).slice(0, 100)
+          : result.error || "未知错误";
+        callbacks?.onToolEnd?.(parsed.tool, result.success, toolSummary);
+
         const afterTextFinal = this.applyAfterHooksText(
           parsed.tool,
           parsed.args,
           result,
         );
 
-        // 工具执行日志
         if (result.success) {
           this.logger.info("工具执行成功", {
             tool: parsed.tool,
-            result:
-              typeof result.data === "string"
-                ? result.data.slice(0, 100)
-                : result.data,
+            result: toolSummary,
           });
         } else {
           this.logger.warn("工具执行失败", {
@@ -88,7 +114,6 @@ ${toolDescription}
           });
         }
 
-        // 组装返回给 AI 的消息
         let userMessage = "";
         if (beforeText) userMessage += `【提示】${beforeText}\n`;
         userMessage += `工具执行结果：${result.success ? result.data : "错误：" + result.error}`;
@@ -99,7 +124,6 @@ ${toolDescription}
         continue;
       }
 
-      // 不是工具调用 → 判断是格式错误还是最终回答
       this.logger.debug("非工具调用，判断为格式错误或最终答案");
       if (this.looksLikeFailedToolCall(response)) {
         consecutiveRetries++;
@@ -116,8 +140,6 @@ ${toolDescription}
       }
 
       consecutiveRetries = 0;
-
-      // 不是工具调用也不是格式错误 → 最终回答
       this.logger.info("任务完成");
       return response;
     }
@@ -126,7 +148,7 @@ ${toolDescription}
     return "任务未完成，循环次数已用完。";
   }
 
-  // 工具匹配
+  // ---- 工具匹配 ----
   private matchToolPattern(pattern: string, toolName: string): boolean {
     if (pattern === "*") return true;
     if (pattern.endsWith("*")) {
@@ -135,7 +157,7 @@ ${toolDescription}
     return pattern === toolName;
   }
 
-  // Hook 文本
+  // ---- Hook 文本 ----
   private applyBeforeHooksText(
     toolName: string,
     args: Record<string, unknown>,
@@ -171,8 +193,10 @@ ${toolDescription}
     return snippets.join("\n");
   }
 
-  // 流式调用
-  private async callModelStream(): Promise<string> {
+  // ---- 流式调用 ----
+  private async callModelStream(
+    onToken?: (token: string) => void,
+  ): Promise<string> {
     try {
       const stream = await client.chat.completions.create({
         model: process.env.model || "deepseek-v4-flash",
@@ -184,37 +208,42 @@ ${toolDescription}
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         if (delta?.content) {
-          process.stdout.write(delta.content);
+          if (onToken) {
+            onToken(delta.content);
+          } else {
+            process.stdout.write(delta.content);
+          }
           fullContent += delta.content;
         }
       }
-      process.stdout.write("\n");
+      if (!onToken) process.stdout.write("\n");
       return fullContent;
     } catch (error: any) {
-      this.logger.error("流式调用失败", { error: error?.message || String(error) });
+      this.logger.error("流式调用失败", {
+        error: error?.message || String(error),
+      });
       console.error("调用 AI 出错：", error);
       return "";
     }
   }
 
-  // 解析工具调用
+  // ---- 解析工具调用 ----
   private parseToolCall(
     response: string,
   ): { tool: string; args: Record<string, unknown> } | null {
     const trimmed = response.trim();
 
-    // 1. 直接解析 JSON
     const direct = this.tryParseToolJson(trimmed);
     if (direct) return direct;
 
-    // 2. 从 markdown 代码块提取
-    const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    const codeBlockMatch = trimmed.match(
+      /```(?:json)?\s*\n?([\s\S]*?)\n?```/,
+    );
     if (codeBlockMatch) {
       const fromBlock = this.tryParseToolJson(codeBlockMatch[1].trim());
       if (fromBlock) return fromBlock;
     }
 
-    // 3. 从文本中提取最大 JSON 对象（处理模型在 JSON 前后加了文字的情况）
     const jsonMatch = this.extractJsonObject(trimmed);
     if (jsonMatch) {
       const fromExtract = this.tryParseToolJson(jsonMatch);
@@ -261,14 +290,10 @@ ${toolDescription}
     return null;
   }
 
-  // 检测是否为格式错误的工具调用尝试
   private looksLikeFailedToolCall(response: string): boolean {
     const trimmed = response.trim();
-    // 包含 tool/args 关键字且看起来像 JSON
     if (/\btool\b/.test(trimmed) && /\bargs\b/.test(trimmed)) return true;
-    // 包含 JSON 代码块但解析失败
     if (/```json/.test(trimmed)) return true;
-    // 以 { 开头但不以 } 结尾（截断的 JSON）
     if (trimmed.startsWith("{") && !trimmed.endsWith("}")) return true;
     return false;
   }

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { agentCommand } from "./agent/main";
-import { getProjectRoot } from "./utils/projectRoot"; // 新增
-import { chdir } from "process"; // 新增
+import { getProjectRoot } from "./utils/projectRoot";
+import { chdir } from "process";
 
 const program = new Command();
 

@@ -12,6 +12,7 @@
     "resolveJsonModule": true,
     "declaration": true,
     "experimentalDecorators": true,
+    "jsx": "react-jsx",
     "types": ["node"] // ✅ 必须放在 compilerOptions 里面
   },
   "include": ["src"],
