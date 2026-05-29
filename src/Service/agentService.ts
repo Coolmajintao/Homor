@@ -18,20 +18,17 @@ export class AgentService {
 
   async execute(userTask: string): Promise<string> {
     const toolDescription = this.toolRegistry.generateToolDescription();
+    const projectRoot = process.cwd();
     const systemPrompt = `你是编程助手。你可以使用以下工具完成任务。
-
 ${toolDescription}
 
 ## 工具调用规则
 当需要使用工具时，必须严格按以下 JSON 格式返回，不要添加任何多余文字：
-{
-  "tool": "工具名",
-  "args": {
-    "参数名": "参数值"
-  }
-}
+{"tool": "工具名", "args": {"参数名": "参数值"}}
+
 如果需要使用工具，请只返回上述 JSON，不要包含其他内容。
-如果你能直接回答用户问题，就不要使用工具，直接返回最终答案。`;
+当任务完成时，直接回复最终结果，不需要使用工具。
+如果不需要使用工具就能回答问题，直接回复答案。`;
 
     this.messages = [
       { role: "system", content: systemPrompt },
@@ -39,6 +36,7 @@ ${toolDescription}
     ];
 
     let maxLoops = 10;
+    let consecutiveRetries = 0;
     while (maxLoops-- > 0) {
       const response = await this.callModelStream();
       if (!response) continue;
@@ -69,31 +67,31 @@ ${toolDescription}
         if (beforeText) userMessage += `【提示】${beforeText}\n`;
         userMessage += `工具执行结果：${result.success ? result.data : "错误：" + result.error}`;
         if (afterTextFinal) userMessage += `\n【提示】${afterTextFinal}`;
-        userMessage += `\n请继续完成任务，直到全部完成为止。完成后请回复“任务完成”。`;
+        userMessage += `\n请继续完成任务。如果任务已完成，直接回复结果即可。`;
 
         this.messages.push({ role: "user", content: userMessage });
         continue;
       }
 
-      // ==============================================
-      // 👇 修复：不是工具调用 → 判断是否结束，不结束就续跑
-      // ==============================================
-      const finishWords = [
-        "完成",
-        "已完成",
-        "任务完成",
-        "结束",
-        "✅ 完成",
-        "全部完成",
-      ];
-      const isTaskFinished = finishWords.some((w) => response.includes(w));
-
-      if (isTaskFinished) {
-        return response;
+      // 不是工具调用 → 判断是格式错误还是最终回答
+      if (this.looksLikeFailedToolCall(response)) {
+        consecutiveRetries++;
+        if (consecutiveRetries >= 3) {
+          return "模型多次返回错误格式，任务中断。请检查模型配置或简化任务描述。";
+        }
+        this.messages.push({ role: "assistant", content: response });
+        this.messages.push({
+          role: "user",
+          content:
+            '你的回复格式不正确。如需使用工具，请严格按 JSON 格式返回（不要添加任何其他文字）：\n{"tool": "工具名", "args": {"参数名": "参数值"}}\n\n如果你已完成任务，直接回复结果即可。',
+        });
+        continue;
       }
 
-      // 否则当作上下文继续
-      this.messages.push({ role: "assistant", content: response });
+      consecutiveRetries = 0;
+
+      // 不是工具调用也不是格式错误 → 最终回答
+      return response;
     }
 
     return "任务未完成，循环次数已用完。";
@@ -173,22 +171,75 @@ ${toolDescription}
   private parseToolCall(
     response: string,
   ): { tool: string; args: Record<string, unknown> } | null {
+    const trimmed = response.trim();
+
+    // 1. 直接解析 JSON
+    const direct = this.tryParseToolJson(trimmed);
+    if (direct) return direct;
+
+    // 2. 从 markdown 代码块提取
+    const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (codeBlockMatch) {
+      const fromBlock = this.tryParseToolJson(codeBlockMatch[1].trim());
+      if (fromBlock) return fromBlock;
+    }
+
+    // 3. 从文本中提取最大 JSON 对象（处理模型在 JSON 前后加了文字的情况）
+    const jsonMatch = this.extractJsonObject(trimmed);
+    if (jsonMatch) {
+      const fromExtract = this.tryParseToolJson(jsonMatch);
+      if (fromExtract) return fromExtract;
+    }
+
+    return null;
+  }
+
+  private tryParseToolJson(
+    jsonStr: string,
+  ): { tool: string; args: Record<string, unknown> } | null {
     try {
-      const json = JSON.parse(response.trim());
-      if (json.tool && json.args) {
+      const json = JSON.parse(jsonStr);
+      if (json.tool && json.args && typeof json.tool === "string") {
         return { tool: json.tool, args: json.args };
       }
     } catch {}
+    return null;
+  }
 
-    const codeBlockMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (codeBlockMatch) {
-      try {
-        const json = JSON.parse(codeBlockMatch[1].trim());
-        if (json.tool && json.args) {
-          return { tool: json.tool, args: json.args };
+  private extractJsonObject(text: string): string | null {
+    const firstBrace = text.indexOf("{");
+    if (firstBrace === -1) return null;
+
+    let depth = 0;
+    let lastValidClose = -1;
+
+    for (let i = firstBrace; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          lastValidClose = i;
+          break;
         }
-      } catch {}
+      }
+    }
+
+    if (lastValidClose > firstBrace) {
+      return text.slice(firstBrace, lastValidClose + 1);
     }
     return null;
+  }
+
+  // 检测是否为格式错误的工具调用尝试
+  private looksLikeFailedToolCall(response: string): boolean {
+    const trimmed = response.trim();
+    // 包含 tool/args 关键字且看起来像 JSON
+    if (/\btool\b/.test(trimmed) && /\bargs\b/.test(trimmed)) return true;
+    // 包含 JSON 代码块但解析失败
+    if (/```json/.test(trimmed)) return true;
+    // 以 { 开头但不以 } 结尾（截断的 JSON）
+    if (trimmed.startsWith("{") && !trimmed.endsWith("}")) return true;
+    return false;
   }
 }
