@@ -113,5 +113,21 @@ export function useAgent() {
     busyRef.current = false;
   }, []);
 
-  return { messages, status, sendMessage };
+  const addSystemMessage = useCallback((text: string) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nextId(),
+        type: "system",
+        content: text,
+        timestamp: Date.now(),
+      },
+    ]);
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+  }, []);
+
+  return { messages, status, sendMessage, addSystemMessage, clearMessages };
 }
