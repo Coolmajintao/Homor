@@ -6,6 +6,7 @@ import {
   DeleteFileTool,
   MkdirTool,
   RmdirTool,
+  TodoWriteTool,
 } from "./index";
 
 import { FindProjectRootTool } from "./project";
@@ -27,6 +28,7 @@ export class ToolRegistry {
     this.register(new GlobTool());
     this.register(new GrepTool());
     this.register(new RmdirTool());
+    this.register(new TodoWriteTool());
   }
 
   // ③ 注册方法：把工具放进 Map

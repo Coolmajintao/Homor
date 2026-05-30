@@ -19,7 +19,7 @@ export const securityHook: ToolHook = {
         return `【高危命令】你尝试执行的 "${command}" 被归类为高危操作，将被系统拒绝。请寻找替代方案（如使用项目内置工具替代 shell 命令），或建议用户手动执行。`;
       case RiskLevel.DESTRUCTIVE:
         logger.warn("安全Hook触发：危险命令", { command });
-        return `【需确认】命令 "${command}" 是危险操作（如删除文件/修改权限），执行前会要求用户确认。请确保这是完成任务所必需的，并告知用户该操作的影响。`;
+        return null; // 确认由 UI 层可见弹窗处理，不在此处提示
       case RiskLevel.MODIFY:
         return null;
       default:

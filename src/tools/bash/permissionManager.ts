@@ -483,8 +483,11 @@ export class PermissionManager {
       return { parsed, risk, needsApproval: false };
     }
 
-    // 6. MODIFY and DESTRUCTIVE need approval
-    return { parsed, risk, needsApproval: true };
+    // 6. Only DESTRUCTIVE needs approval; MODIFY passes
+    if (risk === RiskLevel.DESTRUCTIVE) {
+      return { parsed, risk, needsApproval: true };
+    }
+    return { parsed, risk, needsApproval: false };
   }
 
   /** Show confirmation prompt and return result */
